@@ -1,0 +1,602 @@
+<!-- <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NDVI Predator-Prey Simulation</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>NDVI Predator-Prey Simulation</h1>
+        
+        <div class="control-panel">
+            <form id="simulationForm">
+                <div class="form-group">
+                    <label for="tiff_folder">TIFF Folder:</label>
+                    <input type="text" id="tiff_folder" value="data_tiff">
+                </div>
+                
+                <div class="form-group">
+                    <label for="num_herbivores">Number of Herbivores:</label>
+                    <input type="number" id="num_herbivores" value="1000" min="1">
+                </div>
+                
+                <div class="form-group">
+                    <label for="num_carnivores">Number of Carnivores:</label>
+                    <input type="number" id="num_carnivores" value="200" min="1">
+                </div>
+                
+                <div class="form-group">
+                    <label for="steps">Number of Steps:</label>
+                    <input type="number" id="steps" value="100" min="1">
+                </div>
+                
+                <div class="form-group checkbox">
+                    <input type="checkbox" id="rl_herbivores">
+                    <label for="rl_herbivores">Enable RL for Herbivores</label>
+                </div>
+                
+                <button type="submit" id="startBtn">Start Simulation</button>
+            </form>
+        </div>
+        
+        <div class="results-panel">
+            <div class="chart-container">
+                <canvas id="simulationChart"></canvas>
+            </div>
+            
+            <div class="plot-buttons">
+                <button id="herbivorePlotBtn">Show Herbivore Plot</button>
+                <button id="carnivorePlotBtn">Show Carnivore Plot</button>
+                <button id="ndviPlotBtn">Show NDVI Plot</button>
+                <button id="refreshChartBtn">Refresh Chart</button>
+            </div>
+            
+            <div class="plot-container">
+                <img id="herbivoresPlot" class="plot-image" alt="Herbivore Plot">
+                <img id="carnivoresPlot" class="plot-image" alt="Carnivore Plot">
+                <img id="ndviPlot" class="plot-image" alt="NDVI Plot">
+            </div>
+            
+            <div id="results" class="results-data"></div>
+        </div>
+    </div>
+
+    <script>
+        let simulationChart = null;
+        
+        // Initialize the page
+        document.addEventListener('DOMContentLoaded', () => {
+            // Form submission
+            document.getElementById('simulationForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                await startSimulation();
+            });
+            
+            // Button event listeners
+            document.getElementById('herbivorePlotBtn').addEventListener('click', () => showPlot('herbivores'));
+            document.getElementById('carnivorePlotBtn').addEventListener('click', () => showPlot('carnivores'));
+            document.getElementById('ndviPlotBtn').addEventListener('click', () => showPlot('ndvi'));
+            document.getElementById('refreshChartBtn').addEventListener('click', plotResults);
+        });
+        
+        async function startSimulation() {
+            const startBtn = document.getElementById('startBtn');
+            startBtn.disabled = true;
+            startBtn.textContent = 'Running...';
+            
+            const tiffFolder = document.getElementById('tiff_folder').value;
+            const numHerbivores = document.getElementById('num_herbivores').value;
+            const numCarnivores = document.getElementById('num_carnivores').value;
+            const steps = document.getElementById('steps').value;
+            const rlHerbivores = document.getElementById('rl_herbivores').checked;
+            
+            try {
+                const response = await fetch('/start_simulation', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tiff_folder: tiffFolder,
+                        num_herbivores: numHerbivores,
+                        num_carnivores: numCarnivores,
+                        steps: steps,
+                        rl_herbivores: rlHerbivores
+                    })
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to start simulation');
+                }
+                
+                const result = await response.json();
+                Swal.fire({
+                    icon: 'success',
+                    title: 'Success!',
+                    text: result.message
+                });
+                
+                // Automatically plot results after simulation
+                await plotResults();
+            } catch (error) {
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Error',
+                    text: error.message
+                });
+            } finally {
+                startBtn.disabled = false;
+                startBtn.textContent = 'Start Simulation';
+            }
+        }
+        
+        async function getResults() {
+            try {
+                const response = await fetch('/get_results');
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to get results');
+                }
+                return await response.json();
+            } catch (error) {
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Error',
+                    text: error.message
+                });
+                return null;
+            }
+        }
+        
+        async function plotResults() {
+            const results = await getResults();
+            if (!results) return;
+            
+            const ctx = document.getElementById('simulationChart').getContext('2d');
+            
+            // Destroy previous chart if it exists
+            if (simulationChart) {
+                simulationChart.destroy();
+            }
+            
+            simulationChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: Array.from({ length: results.herbivore_count_history.length }, (_, i) => i + 1),
+                    datasets: [
+                        {
+                            label: 'Herbivores',
+                            data: results.herbivore_count_history,
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                            borderWidth: 2,
+                            tension: 0.1,
+                            fill: true
+                        },
+                        {
+                            label: 'Carnivores',
+                            data: results.carnivore_count_history,
+                            borderColor: 'rgba(255, 99, 132, 1)',
+                            backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                            borderWidth: 2,
+                            tension: 0.1,
+                            fill: true
+                        },
+                        {
+                            label: 'NDVI Mean',
+                            data: results.ndvi_mean_history,
+                            borderColor: 'rgba(54, 162, 235, 1)',
+                            backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                            borderWidth: 2,
+                            tension: 0.1,
+                            fill: true
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        },
+                        title: {
+                            display: true,
+                            text: 'Population Dynamics Over Time'
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Simulation Steps'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Population/NDVI Value'
+                            },
+                            beginAtZero: true
+                        }
+                    },
+                    interaction: {
+                        mode: 'nearest',
+                        axis: 'x',
+                        intersect: false
+                    }
+                }
+            });
+            
+            // Display results in the pre element
+            document.getElementById('results').textContent = JSON.stringify(results, null, 2);
+        }
+        
+        async function showPlot(plotType) {
+            // Hide all plots first
+            document.querySelectorAll('.plot-image').forEach(img => {
+                img.style.display = 'none';
+            });
+            
+            try {
+                const response = await fetch(`/get_plot_image/${plotType}`);
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to load plot');
+                }
+                
+                // Create a blob URL for the image
+                const blob = await response.blob();
+                const plotImg = document.getElementById(`${plotType}Plot`);
+                plotImg.src = URL.createObjectURL(blob);
+                plotImg.style.display = 'block';
+                
+                // Scroll to the plot
+                plotImg.scrollIntoView({ behavior: 'smooth' });
+            } catch (error) {
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Error',
+                    text: error.message
+                });
+            }
+        }
+    </script>
+</body>
+</html> -->
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NDVI Predator-Prey Simulation</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+    <div class="simulation-container">
+        <header class="simulation-header">
+            <h1>NDVI Predator-Prey Simulation</h1>
+            <a href="/" class="back-button">← Back to Home</a>
+        </header>
+        
+        <div class="simulation-controls">
+            <form id="simulationForm">
+                <div class="control-group">
+                    <label for="tiff_folder">TIFF Folder:</label>
+                    <input type="text" id="tiff_folder" value="data_tiff">
+                </div>
+                
+                <div class="control-row">
+                    <div class="control-group">
+                        <label for="num_herbivores">Herbivores:</label>
+                        <input type="number" id="num_herbivores" value="1000" min="1">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="num_carnivores">Carnivores:</label>
+                        <input type="number" id="num_carnivores" value="200" min="1">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="steps">Steps:</label>
+                        <input type="number" id="steps" value="100" min="1">
+                    </div>
+                </div>
+                
+                <div class="control-group checkbox-group">
+                    <input type="checkbox" id="rl_herbivores">
+                    <label for="rl_herbivores">Enable RL for Herbivores</label>
+                </div>
+                
+                <button type="submit" id="startBtn" class="primary-button">
+                    <span class="button-text">Start Simulation</span>
+                    <span class="button-loader" style="display: none;">⏳</span>
+                </button>
+            </form>
+        </div>
+
+        <!-- <div class="wildlife-elements">
+            <div class="wildlife-tooltip" data-tooltip="Herbivore Population">
+                <img src="/static/deer-icon.png" alt="Deer">
+            </div>
+            <div class="wildlife-tooltip" data-tooltip="Carnivore Population">
+                <img src="/static/wolf-icon.png" alt="Wolf">
+            </div>
+            <div class="wildlife-tooltip" data-tooltip="Vegetation Index">
+                <img src="/static/leaf-icon.png" alt="Vegetation">
+            </div>
+        </div> -->
+        
+        <div class="visualization-section">
+            <div class="chart-container">
+                <canvas id="simulationChart"></canvas>
+            </div>
+            
+            <div class="plot-controls">
+                <button id="herbivorePlotBtn" class="plot-button">
+                    <span>Show Herbivore Plot</span>
+                </button>
+                <button id="carnivorePlotBtn" class="plot-button">
+                    <span>Show Carnivore Plot</span>
+                </button>
+                <button id="ndviPlotBtn" class="plot-button">
+                    <span>Show NDVI Plot</span>
+                </button>
+                <button id="refreshChartBtn" class="secondary-button">
+                    Refresh Chart
+                </button>
+            </div>
+            
+            <div class="plot-display">
+                <img id="herbivoresPlot" class="plot-image" alt="Herbivore Plot">
+                <img id="carnivoresPlot" class="plot-image" alt="Carnivore Plot">
+                <img id="ndviPlot" class="plot-image" alt="NDVI Plot">
+            </div>
+            
+            <div class="ecosystem-3d-container">
+                <div id="ecosystem3d"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Main simulation variables
+        let simulationChart;
+        let isSimulationRunning = false;
+    
+        // Initialize Chart.js
+        function initChart() {
+            const ctx = document.getElementById('simulationChart').getContext('2d');
+            simulationChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: 'Herbivores',
+                            data: [],
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Carnivores',
+                            data: [],
+                            borderColor: 'rgba(255, 99, 132, 1)',
+                            backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                            tension: 0.1
+                        },
+                        {
+                            label: 'NDVI',
+                            data: [],
+                            borderColor: 'rgba(54, 162, 235, 1)',
+                            backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                            tension: 0.1,
+                            yAxisID: 'y1'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Population Count'
+                            }
+                        },
+                        y1: {
+                            position: 'right',
+                            beginAtZero: false,
+                            min: 0,
+                            max: 1,
+                            title: {
+                                display: true,
+                                text: 'NDVI Value'
+                            },
+                            grid: {
+                                drawOnChartArea: false
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    
+        // Handle form submission
+        document.getElementById('simulationForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            if (isSimulationRunning) return;
+            
+            const startBtn = document.getElementById('startBtn');
+            const buttonText = startBtn.querySelector('.button-text');
+            const buttonLoader = startBtn.querySelector('.button-loader');
+            
+            // Show loading state
+            buttonText.textContent = 'Running...';
+            buttonLoader.style.display = 'inline-block';
+            startBtn.disabled = true;
+            isSimulationRunning = true;
+            
+            try {
+                // Get form values
+                const formData = {
+                    tiff_folder: document.getElementById('tiff_folder').value,
+                    num_herbivores: document.getElementById('num_herbivores').value,
+                    num_carnivores: document.getElementById('num_carnivores').value,
+                    steps: document.getElementById('steps').value,
+                    rl_herbivores: document.getElementById('rl_herbivores').checked
+                };
+                
+                // Start simulation
+                const response = await fetch('/start_simulation', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Simulation failed to start');
+                }
+                
+                // Get results
+                const resultsResponse = await fetch('/get_results');
+                if (!resultsResponse.ok) {
+                    throw new Error('Failed to get simulation results');
+                }
+                
+                const results = await resultsResponse.json();
+                
+                // Update chart
+                updateChart(results);
+                
+                // Show success message
+                Swal.fire({
+                    title: 'Success!',
+                    text: 'Simulation completed successfully',
+                    icon: 'success'
+                });
+                
+            } catch (error) {
+                console.error('Simulation error:', error);
+                Swal.fire({
+                    title: 'Error!',
+                    text: error.message || 'Simulation failed',
+                    icon: 'error'
+                });
+            } finally {
+                // Reset button state
+                buttonText.textContent = 'Start Simulation';
+                buttonLoader.style.display = 'none';
+                startBtn.disabled = false;
+                isSimulationRunning = false;
+            }
+        });
+    
+        // Update chart with simulation results
+        function updateChart(results) {
+            const steps = results.herbivore_count_history.length;
+            simulationChart.data.labels = Array.from({length: steps}, (_, i) => i + 1);
+            
+            simulationChart.data.datasets[0].data = results.herbivore_count_history;
+            simulationChart.data.datasets[1].data = results.carnivore_count_history;
+            simulationChart.data.datasets[2].data = results.ndvi_mean_history;
+            
+            simulationChart.update();
+        }
+    
+        // Handle plot buttons
+        document.getElementById('herbivorePlotBtn').addEventListener('click', async function() {
+            await showPlot('herbivores');
+        });
+        
+        document.getElementById('carnivorePlotBtn').addEventListener('click', async function() {
+            await showPlot('carnivores');
+        });
+        
+        document.getElementById('ndviPlotBtn').addEventListener('click', async function() {
+            await showPlot('ndvi');
+        });
+        
+        document.getElementById('refreshChartBtn').addEventListener('click', async function() {
+            try {
+                const resultsResponse = await fetch('/get_results');
+                if (!resultsResponse.ok) {
+                    throw new Error('Failed to get simulation results');
+                }
+                const results = await resultsResponse.json();
+                updateChart(results);
+            } catch (error) {
+                console.error('Error refreshing chart:', error);
+                Swal.fire({
+                    title: 'Error!',
+                    text: error.message || 'Failed to refresh chart',
+                    icon: 'error'
+                });
+            }
+        });
+    
+        // Show plot image
+        async function showPlot(plotType) {
+            try {
+                // Hide all plots first
+                document.querySelectorAll('.plot-image').forEach(img => {
+                    img.style.display = 'none';
+                });
+                
+                // Get the plot image
+                const response = await fetch(`/get_plot_image/${plotType}`);
+                if (!response.ok) {
+                    throw new Error(`Failed to get ${plotType} plot`);
+                }
+                
+                // Create blob URL for the image
+                const blob = await response.blob();
+                const imageUrl = URL.createObjectURL(blob);
+                
+                // Display the image
+                const plotElement = document.getElementById(`${plotType}Plot`);
+                plotElement.src = imageUrl;
+                plotElement.style.display = 'block';
+                
+            } catch (error) {
+                console.error(`Error showing ${plotType} plot:`, error);
+                Swal.fire({
+                    title: 'Error!',
+                    text: error.message || `Failed to show ${plotType} plot`,
+                    icon: 'error'
+                });
+            }
+        }
+    
+        // Initialize the chart when the page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            initChart();
+            
+            // Remove the mini 3D scene initialization (conflicts with the main one)
+            const mini3dScript = document.querySelector('script');
+            if (mini3dScript) {
+                mini3dScript.remove();
+            }
+        });
+    </script>
+</body>
+</html>
